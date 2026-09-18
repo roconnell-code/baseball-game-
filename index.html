@@ -6,8 +6,6 @@
   <title>Catcher's View — Swing</title>
   <style>
     :root {
-      --dirt: #c4a06a;
-      --grass: #2f7a3a;
       --ink: #f4efe4;
       --gold: #f4d35e;
       --red: #d62828;
@@ -83,7 +81,7 @@
       <p class="sub">Catcher's view. Press <kbd>Space</kbd> to swing. Time the pitch.</p>
     </div>
     <div class="hud">
-      <span>Strikes <b class="strikes" id="strikes">● ● ●</b></span>
+      <span>Strikes <b class="strikes" id="strikes">○ ○ ○</b></span>
       <span>Last <b id="last">—</b></span>
       <span>Best <b id="best">0 ft</b></span>
       <span>Hits <b id="hits">0</b></span>
@@ -105,6 +103,13 @@
     const hitsEl = document.getElementById("hits");
 
     const audio = new (window.AudioContext || window.webkitAudioContext)();
+
+    const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+    const lerp = (a, b, t) => a + (b - a) * t;
+    const easeIn = (t) => t * t;
+    const easeOut = (t) => 1 - (1 - t) * (1 - t);
+    const easeInOut = (t) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
+    const smooth = (t) => t * t * (3 - 2 * t);
 
     function beep(freq, dur, type, gain) {
       const o = audio.createOscillator();
@@ -128,17 +133,38 @@
       phase: "idle",
       t: 0,
       pitchT: 0,
-      pitchDur: 1.05,
+      pitchDur: 0.68,
       swingT: -1,
-      batAngle: -0.35,
-      swingCooldown: 0,
+      swingClock: 0,
+      swinging: false,
       result: null,
       resultT: 0,
-      ball: { z: 60.5, y: 4.2, x: 0, vx: 0, vy: 0, vz: 0, hit: false, gone: false },
-      pitcherArm: 0,
+      ball: null,
+      trail: [],
+      particles: [],
       crowd: 0,
       flash: 0,
+      camShake: 0,
+      camBob: 0,
+      glove: { x: 0.4, y: 1.6, snap: 0 },
+      load: 0,
+      clock: 0,
     };
+
+    function newBall() {
+      return {
+        z: 60.5,
+        y: 5.6,
+        x: 0.15,
+        vx: 0, vy: 0, vz: 0,
+        spin: 0,
+        hit: false,
+        gone: false,
+        inHand: true,
+        targetX: (Math.random() - 0.5) * 1.1,
+        targetY: 2.55 + Math.random() * 0.7,
+      };
+    }
 
     function resetGame() {
       state.mode = "play";
@@ -147,6 +173,7 @@
       state.best = 0;
       state.last = "—";
       state.result = null;
+      state.particles = [];
       startIdle();
       updateHud();
     }
@@ -155,48 +182,55 @@
       state.phase = "idle";
       state.t = 0;
       state.swingT = -1;
-      state.batAngle = -0.35;
-      state.ball = { z: 60.5, y: 4.2, x: 0.2, vx: 0, vy: 0, vz: 0, hit: false, gone: false };
-      state.pitcherArm = 0;
+      state.swingClock = 0;
+      state.swinging = false;
+      state.ball = newBall();
+      state.trail = [];
+      state.glove.snap = 0;
+      state.load = 0;
     }
 
     function startWindup() {
       state.phase = "windup";
       state.t = 0;
       state.swingT = -1;
-      state.pitchDur = 0.95 + Math.random() * 0.28;
-      state.ball.x = (Math.random() - 0.5) * 1.4;
-      state.ball.y = 3.8 + Math.random() * 0.8;
+      state.pitchDur = 0.58 + Math.random() * 0.16;
     }
 
     function startPitch() {
       state.phase = "pitch";
       state.pitchT = 0;
-      state.swingT = -1;
-      beep(180, 0.08, "sine", 0.04);
+      state.ball.inHand = false;
+      state.ball.z = 58.5;
+      state.ball.y = 6.1;
+      state.ball.x = 0.35;
+      beep(170, 0.06, "sine", 0.035);
     }
 
     function updateHud() {
-      const dots = [0, 1, 2].map((i) => (i < state.strikes ? "●" : "○")).join(" ");
-      strikesEl.textContent = dots;
+      strikesEl.textContent = [0, 1, 2].map((i) => (i < state.strikes ? "●" : "○")).join(" ");
       lastEl.textContent = state.last;
       bestEl.textContent = Math.round(state.best) + " ft";
       hitsEl.textContent = String(state.hits);
     }
 
     function project(x, y, z) {
-      const camZ = -2.2;
-      const depth = Math.max(0.35, z - camZ);
-      const scale = 520 / depth;
+      const camZ = -4.8;
+      const camY = 2.55;
+      const depth = Math.max(1.15, z - camZ);
+      const scale = 430 / depth;
+      const shakeX = state.camShake ? (Math.random() - 0.5) * state.camShake * 12 : 0;
+      const shakeY = state.camShake ? (Math.random() - 0.5) * state.camShake * 8 : 0;
+      const bob = Math.sin(state.camBob) * 2.4;
       return {
-        x: W * 0.52 + x * scale,
-        y: H * 0.62 - y * scale + depth * 1.15,
+        x: W * 0.545 + x * scale + shakeX,
+        y: 398 - (y - camY) * scale + shakeY + bob,
         s: scale,
       };
     }
 
     function perfectWindow() {
-      return 0.9;
+      return 0.86;
     }
 
     function swing() {
@@ -207,10 +241,11 @@
         }
         return;
       }
-      if (state.phase === "result" || state.phase === "idle" || state.swingT >= 0 || state.swingCooldown > 0) return;
+      if (state.phase === "result" || state.phase === "idle" || state.swinging) return;
+      state.swinging = true;
+      state.swingClock = 0;
       state.swingT = state.phase === "pitch" ? state.pitchT : -1;
-      state.swingCooldown = 0.55;
-      beep(140, 0.12, "sawtooth", 0.05);
+      beep(120, 0.1, "sawtooth", 0.04);
 
       if (state.phase !== "pitch") {
         resolveMiss("Too early");
@@ -221,18 +256,17 @@
 
     function judgeSwing() {
       const p = state.pitchT / state.pitchDur;
-      const perfect = perfectWindow();
-      const err = p - perfect;
+      const err = p - perfectWindow();
       const abs = Math.abs(err);
 
-      if (p < 0.72 || p > 0.99) {
-        resolveMiss(p < 0.72 ? "Way early" : "Too late");
+      if (p < 0.68 || p > 0.98) {
+        resolveMiss(p < 0.68 ? "Way early" : "Too late");
         return;
       }
 
-      const quality = Math.max(0, 1 - abs / 0.16);
-      const boosted = Math.pow(quality, 1.15);
-      const feet = 40 + boosted * 430;
+      const quality = Math.max(0, 1 - abs / 0.18);
+      const boosted = Math.pow(quality, 1.12);
+      const feet = 48 + boosted * 422;
       const labels = [
         [0.93, "CRUSHED — HOME RUN"],
         [0.8, "GONE — HOME RUN"],
@@ -241,29 +275,45 @@
         [0.28, "Bloop single"],
         [0, "Weak contact"],
       ];
-      const label = labels.find((row) => boosted >= row[0])[1];
-      resolveHit(feet, boosted, label, err);
+      resolveHit(feet, boosted, labels.find((row) => boosted >= row[0])[1], err);
+    }
+
+    function burst(x, y, z, n, color, speed) {
+      for (let i = 0; i < n; i++) {
+        const a = Math.random() * Math.PI * 2;
+        state.particles.push({
+          x, y, z,
+          vx: Math.cos(a) * Math.random() * speed,
+          vy: Math.random() * speed * 0.9,
+          vz: (Math.random() - 0.5) * speed,
+          life: 0.35 + Math.random() * 0.45,
+          max: 0.7,
+          color,
+        });
+      }
     }
 
     function resolveHit(feet, quality, label, err) {
       state.phase = "result";
       state.resultT = 0;
-      state.ball.hit = true;
-      state.ball.gone = quality > 0.78;
-      state.ball.vz = -(18 + quality * 28);
-      state.ball.vy = 6 + quality * 16;
-      state.ball.vx = (err < 0 ? -1 : 1) * (0.8 + Math.abs(err) * 8);
+      const b = state.ball;
+      b.hit = true;
+      b.gone = quality > 0.78;
+      b.vz = 22 + quality * 38;
+      b.vy = 8 + quality * 18;
+      b.vx = (err < 0 ? -1.6 : 1.2) * (0.4 + Math.abs(err) * 9);
+      b.spin = 28 + quality * 18;
       state.hits += 1;
       state.best = Math.max(state.best, feet);
       state.last = Math.round(feet) + " ft";
       state.result = { kind: "hit", feet, label, quality };
-      state.flash = quality > 0.78 ? 0.45 : 0.18;
+      state.flash = quality > 0.78 ? 0.38 : 0.16;
+      state.camShake = 0.18 + quality * 0.22;
       state.crowd = quality;
-      beep(520, 0.08, "square", 0.06);
-      setTimeout(() => beep(780, 0.18, "triangle", 0.07), 40);
-      if (quality > 0.78) {
-        setTimeout(() => beep(220, 0.4, "sine", 0.05), 80);
-      }
+      burst(b.x, b.y, b.z, 14, "#fff6d5", 6);
+      beep(480, 0.07, "square", 0.07);
+      setTimeout(() => beep(740, 0.16, "triangle", 0.06), 35);
+      if (quality > 0.78) setTimeout(() => beep(240, 0.45, "sine", 0.05), 90);
       updateHud();
     }
 
@@ -273,12 +323,11 @@
       state.strikes += 1;
       state.last = "Miss";
       state.result = { kind: "miss", label: why || "Swing and a miss" };
-      state.flash = 0.2;
-      beep(90, 0.25, "square", 0.06);
+      state.flash = 0.16;
+      state.camShake = 0.08;
+      beep(88, 0.22, "square", 0.05);
       updateHud();
-      if (state.strikes >= 3) {
-        state.mode = "over";
-      }
+      if (state.strikes >= 3) state.mode = "over";
     }
 
     function takePitch() {
@@ -286,6 +335,9 @@
       state.resultT = 0;
       state.last = "Take";
       state.result = { kind: "take", label: "Taken. No swing." };
+      state.glove.snap = 1;
+      burst(state.ball.x, 0.2, 0.4, 8, "#c4a06a", 3);
+      beep(90, 0.08, "sine", 0.04);
       updateHud();
     }
 
@@ -297,20 +349,94 @@
     });
     canvas.addEventListener("pointerdown", () => swing());
 
+    function pitcherPose() {
+      const pose = {
+        rock: 0,
+        kick: 0,
+        stride: 0,
+        torso: 0,
+        glove: 0.2,
+        throwA: 0.35,
+        throwB: 0.5,
+        lean: 0,
+        ballHand: true,
+      };
+      if (state.phase === "idle") {
+        pose.rock = Math.sin(state.clock * 2.2) * 0.04;
+        pose.glove = 0.15 + Math.sin(state.clock * 2.2) * 0.05;
+        pose.throwA = 0.45;
+        return pose;
+      }
+      if (state.phase === "windup") {
+        const u = clamp(state.t / 1.35, 0, 1);
+        pose.rock = Math.sin(u * Math.PI) * -0.12;
+        pose.kick = u < 0.55 ? easeInOut(u / 0.55) : 1 - easeIn((u - 0.55) / 0.45) * 0.25;
+        pose.stride = u > 0.6 ? easeIn((u - 0.6) / 0.4) * 0.55 : 0;
+        pose.torso = smooth(u) * 0.35;
+        pose.glove = lerp(0.15, -0.9, smooth(u));
+        pose.throwA = u < 0.45 ? lerp(0.45, -2.5, easeInOut(u / 0.45)) : lerp(-2.5, -0.2, easeIn((u - 0.45) / 0.55));
+        pose.throwB = u < 0.5 ? 0.2 : lerp(0.2, 1.4, (u - 0.5) / 0.5);
+        pose.lean = u * 0.12;
+        pose.ballHand = true;
+        return pose;
+      }
+      const u = state.phase === "pitch" ? clamp(state.pitchT / 0.22, 0, 1) : clamp(state.resultT / 0.45, 0, 1);
+      pose.kick = 0.1;
+      pose.stride = lerp(0.55, 1, easeOut(u));
+      pose.torso = lerp(0.35, -0.45, easeOut(u));
+      pose.glove = lerp(-0.9, 0.4, easeOut(u));
+      pose.throwA = lerp(-0.2, 2.5, easeOut(u));
+      pose.throwB = lerp(1.4, 0.2, easeOut(u));
+      pose.lean = lerp(0.12, 0.28, u);
+      pose.ballHand = false;
+      return pose;
+    }
+
+    function swingAmount() {
+      if (!state.swinging) return 0;
+      return clamp(state.swingClock / 0.34, 0, 1);
+    }
+
+    function batPoints() {
+      const s = swingAmount();
+      const load = state.load;
+      const hands = { x: -6.4 - load * 0.4, y: 3.55 + load * 0.4, z: 2.6 - load * 0.55 };
+      let ang = -0.15 - load * 0.55;
+      if (s > 0) {
+        const swingEase = s < 0.45 ? easeIn(s / 0.45) * 0.55 : 0.55 + easeOut((s - 0.45) / 0.55) * 2.35;
+        ang = -0.7 + swingEase;
+        hands.y = lerp(4.0, 3.05, Math.min(1, s * 1.4));
+        hands.z = lerp(2.1, 4.6, s);
+        hands.x = lerp(-6.8, -2.4, s);
+      }
+      const len = 3.15;
+      const barrel = {
+        x: hands.x + Math.sin(ang) * len * 0.35,
+        y: hands.y + Math.cos(ang) * len * 0.22 + (1 - s) * 1.6,
+        z: hands.z + Math.cos(ang) * len,
+      };
+      if (s < 0.08 && !state.swinging) {
+        barrel.x = hands.x - 0.4;
+        barrel.y = hands.y + 2.4;
+        barrel.z = hands.z - 1.6;
+      }
+      return { hands, barrel, ang, s };
+    }
+
     function drawSky() {
-      const g = ctx.createLinearGradient(0, 0, 0, H * 0.55);
-      g.addColorStop(0, "#6cb6e8");
+      const g = ctx.createLinearGradient(0, 0, 0, H * 0.52);
+      g.addColorStop(0, "#5aa6dc");
       g.addColorStop(0.55, "#b7dff7");
-      g.addColorStop(1, "#e8f4c8");
+      g.addColorStop(1, "#dceeb8");
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, W, H);
-
-      ctx.fillStyle = "rgba(255,255,255,0.85)";
-      for (const c of [[140, 70, 90], [380, 50, 110], [820, 80, 120]]) {
+      ctx.fillStyle = "rgba(255,255,255,0.82)";
+      const drift = Math.sin(state.clock * 0.15);
+      [[160, 78, 96], [420, 54, 118], [840, 86, 124]].forEach((c, i) => {
         ctx.beginPath();
-        ctx.ellipse(c[0], c[1], c[2], 22, 0, 0, Math.PI * 2);
+        ctx.ellipse(c[0] + drift * (8 + i * 4), c[1], c[2], 20, 0, 0, Math.PI * 2);
         ctx.fill();
-      }
+      });
     }
 
     function drawStadium() {
@@ -323,10 +449,11 @@
       ctx.closePath();
       ctx.fill();
 
-      ctx.fillStyle = "#2a3344";
-      for (let i = 0; i < 18; i++) {
-        const x = 40 + i * 60;
-        ctx.fillRect(x, 170 + Math.sin(i) * 8, 28, 90);
+      for (let i = 0; i < 22; i++) {
+        const x = 20 + i * 50;
+        const wave = Math.sin(i * 0.9 + state.clock * 2.4 + state.crowd * 8) * (4 + state.crowd * 10);
+        ctx.fillStyle = i % 3 === 0 ? "#2a3344" : "#323c50";
+        ctx.fillRect(x, 168 + wave, 22, 92 - wave);
       }
 
       const wall = ctx.createLinearGradient(0, 300, 0, 390);
@@ -340,7 +467,6 @@
       ctx.lineTo(0, 400);
       ctx.closePath();
       ctx.fill();
-
       ctx.fillStyle = "#c9d6e2";
       ctx.font = "bold 18px Trebuchet MS";
       ctx.textAlign = "center";
@@ -348,34 +474,70 @@
     }
 
     function drawField() {
-      const grass = ctx.createLinearGradient(0, 360, 0, H);
+      const grassTop = project(0, 0, 160);
+      const grass = ctx.createLinearGradient(0, grassTop.y - 40, 0, H);
       grass.addColorStop(0, "#3c9a4a");
       grass.addColorStop(1, "#1e5c28");
       ctx.fillStyle = grass;
-      ctx.fillRect(0, 360, W, H - 360);
-
-      ctx.fillStyle = "#d2b48c";
       ctx.beginPath();
-      ctx.moveTo(W * 0.52, 390);
-      ctx.lineTo(W + 80, H);
-      ctx.lineTo(-80, H);
+      ctx.moveTo(0, grassTop.y);
+      ctx.lineTo(W, grassTop.y);
+      ctx.lineTo(W, H);
+      ctx.lineTo(0, H);
       ctx.closePath();
       ctx.fill();
 
-      ctx.fillStyle = "#c19a6b";
-      const mound = project(0, 0.2, 60.5);
+      const moundPt = project(0, 0, 60.5);
+      const leftFoul = project(-55, 0, 78);
+      const rightFoul = project(55, 0, 78);
+      const nearL = project(-18, 0, 0.4);
+      const nearR = project(18, 0, 0.4);
+      ctx.fillStyle = "#d2b48c";
       ctx.beginPath();
-      ctx.ellipse(mound.x, mound.y + 18, 46, 16, 0, 0, Math.PI * 2);
+      ctx.moveTo(moundPt.x, moundPt.y);
+      ctx.lineTo(rightFoul.x, rightFoul.y);
+      ctx.lineTo(nearR.x, H);
+      ctx.lineTo(nearL.x, H);
+      ctx.lineTo(leftFoul.x, leftFoul.y);
+      ctx.closePath();
       ctx.fill();
 
-      const plate = project(0, 0, 1.6);
+      ctx.fillStyle = "rgba(180,140,90,0.35)";
+      for (let i = 0; i < 18; i++) {
+        ctx.fillRect(80 + i * 58, 430 + (i % 3) * 28, 40, 3);
+      }
+
+      const box = [
+        project(-5.8, 0.02, 1.4),
+        project(-3.4, 0.02, 1.4),
+        project(-3.4, 0.02, 5.8),
+        project(-5.8, 0.02, 5.8),
+      ];
+      ctx.strokeStyle = "rgba(255,255,255,0.5)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(box[0].x, box[0].y);
+      box.forEach((pt, i) => i && ctx.lineTo(pt.x, pt.y));
+      ctx.closePath();
+      ctx.stroke();
+
+      const mound = project(0, 0.12, 60.5);
+      ctx.fillStyle = "#c19a6b";
+      ctx.beginPath();
+      ctx.ellipse(mound.x, mound.y + mound.s * 0.08, mound.s * 0.24, mound.s * 0.08, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#efe6d6";
+      ctx.fillRect(mound.x - 8, mound.y + 2, 16, 4);
+
+      const plate = project(0, 0, 1.15);
+      const ps = plate.s * 0.22;
       ctx.fillStyle = "#f7f3ea";
       ctx.beginPath();
-      ctx.moveTo(plate.x, plate.y - 18);
-      ctx.lineTo(plate.x + 42, plate.y + 6);
-      ctx.lineTo(plate.x + 26, plate.y + 28);
-      ctx.lineTo(plate.x - 26, plate.y + 28);
-      ctx.lineTo(plate.x - 42, plate.y + 6);
+      ctx.moveTo(plate.x, plate.y - ps * 0.55);
+      ctx.lineTo(plate.x + ps, plate.y + ps * 0.15);
+      ctx.lineTo(plate.x + ps * 0.62, plate.y + ps * 0.85);
+      ctx.lineTo(plate.x - ps * 0.62, plate.y + ps * 0.85);
+      ctx.lineTo(plate.x - ps, plate.y + ps * 0.15);
       ctx.closePath();
       ctx.fill();
       ctx.strokeStyle = "#8a8174";
@@ -383,137 +545,281 @@
       ctx.stroke();
     }
 
-    function drawPitcher(t) {
-      const p = project(0, 5.4, 60.5);
-      const s = p.s * 0.085;
+    function limb(x1, y1, x2, y2, w, color) {
+      ctx.strokeStyle = color;
+      ctx.lineCap = "round";
+      ctx.lineWidth = w;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+
+    function drawPitcher() {
+      const pose = pitcherPose();
+      const p = project(pose.rock * 1.2, 5.7, 60.5 - pose.stride * 2.2);
+      const s = Math.max(0.48, p.s * 0.24);
       ctx.save();
       ctx.translate(p.x, p.y);
+      ctx.rotate(pose.lean * 0.4);
       ctx.scale(s, s);
 
-      let arm = -0.4;
-      if (state.phase === "windup") arm = -2.4 + Math.sin(state.t * 7) * 0.2;
-      if (state.phase === "pitch") arm = -0.2 + state.pitchT * 2.2;
-      if (state.phase === "result" && !state.ball.hit) arm = 1.4;
-
-      ctx.fillStyle = "#fff";
-      ctx.fillRect(-10, 8, 20, 28);
-      ctx.fillStyle = "#1d3557";
-      ctx.fillRect(-11, 34, 10, 22);
-      ctx.fillRect(1, 34, 10, 22);
-      ctx.fillStyle = "#e63946";
-      ctx.fillRect(-10, 8, 20, 8);
+      const hipY = 30;
+      const plantX = -6 - pose.stride * 4;
+      const plantY = 58;
+      const kickX = 8 + pose.stride * 10;
+      const kickY = 58 - pose.kick * 22;
+      limb(0, hipY, plantX, plantY, 7, "#1d3557");
+      limb(0, hipY, kickX, kickY, 7, "#1d3557");
+      ctx.fillStyle = "#111";
+      ctx.beginPath();
+      ctx.ellipse(plantX, plantY + 3, 7, 3, 0, 0, Math.PI * 2);
+      ctx.ellipse(kickX + 2, kickY + 3, 7, 3, 0, 0, Math.PI * 2);
+      ctx.fill();
 
       ctx.save();
-      ctx.translate(8, 14);
-      ctx.rotate(arm);
+      ctx.translate(0, 14);
+      ctx.rotate(pose.torso);
       ctx.fillStyle = "#fff";
-      ctx.fillRect(-4, -4, 8, 26);
+      ctx.beginPath();
+      ctx.roundRect(-11, 0, 22, 28, 5);
+      ctx.fill();
+      ctx.fillStyle = "#e63946";
+      ctx.fillRect(-11, 0, 22, 7);
+
+      const gloveX = -16 + Math.cos(pose.glove) * 16;
+      const gloveY = 10 + Math.sin(pose.glove) * 14;
+      limb(-6, 8, gloveX, gloveY, 6, "#fff");
+      ctx.fillStyle = "#6b3a1a";
+      ctx.beginPath();
+      ctx.ellipse(gloveX - 2, gloveY, 7, 6, -0.4, 0, Math.PI * 2);
+      ctx.fill();
+
+      const shX = 8;
+      const shY = 7;
+      const elX = shX + Math.cos(pose.throwA) * 14;
+      const elY = shY + Math.sin(pose.throwA) * 14;
+      const hX = elX + Math.cos(pose.throwA + pose.throwB) * 13;
+      const hY = elY + Math.sin(pose.throwA + pose.throwB) * 13;
+      limb(shX, shY, elX, elY, 6, "#fff");
+      limb(elX, elY, hX, hY, 5.5, "#f1c27d");
       ctx.fillStyle = "#f1c27d";
       ctx.beginPath();
-      ctx.arc(0, 24, 5, 0, Math.PI * 2);
+      ctx.arc(hX, hY, 4.2, 0, Math.PI * 2);
       ctx.fill();
+
+      if (pose.ballHand && state.ball && state.ball.inHand) {
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.arc(hX + 3, hY - 1, 3.4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#d62828";
+        ctx.lineWidth = 0.7;
+        ctx.beginPath();
+        ctx.arc(hX + 3, hY - 1, 2.2, -0.8, 0.8);
+        ctx.stroke();
+      }
       ctx.restore();
 
       ctx.fillStyle = "#f1c27d";
       ctx.beginPath();
-      ctx.arc(0, 2, 8, 0, Math.PI * 2);
+      ctx.arc(pose.torso * 4, 4, 8, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = "#111";
-      ctx.fillRect(-9, -6, 18, 6);
+      ctx.beginPath();
+      ctx.ellipse(pose.torso * 4, -1, 9, 5.5, 0, Math.PI, 0, true);
+      ctx.fill();
+      ctx.fillStyle = "#e63946";
+      ctx.fillRect(pose.torso * 4 - 8, -6, 16, 3);
       ctx.restore();
     }
 
     function drawBatter() {
-      const p = project(-7.2, 4.8, 6.8);
-      const s = p.s * 0.12;
+      const sAmt = swingAmount();
+      const hips = Math.sin(sAmt * Math.PI) * 0.45 + state.load * -0.12;
+      const p = project(-8.2 - hips * 0.55, 5.35, 3.4);
+      const s = Math.max(2.4, p.s * 0.095);
       ctx.save();
       ctx.translate(p.x, p.y);
       ctx.scale(s, s);
 
-      ctx.fillStyle = "#1d3557";
-      ctx.fillRect(-12, 10, 24, 36);
-      ctx.fillRect(-16, 44, 12, 28);
-      ctx.fillRect(2, 44, 12, 28);
-      ctx.fillStyle = "#e63946";
-      ctx.fillRect(-12, 10, 24, 7);
-      ctx.fillStyle = "#f1c27d";
-      ctx.beginPath();
-      ctx.arc(-2, 2, 9, 0, Math.PI * 2);
-      ctx.fill();
+      const plant = 52;
+      const stride = sAmt * 10;
+      limb(-8, 28, -14, plant, 8, "#1d3557");
+      limb(4, 28, 8 + stride, plant - sAmt * 2, 8, "#1d3557");
       ctx.fillStyle = "#111";
       ctx.beginPath();
-      ctx.arc(-2, 0, 10, Math.PI, 0);
+      ctx.ellipse(-14, plant + 3, 8, 3.2, 0, 0, Math.PI * 2);
+      ctx.ellipse(8 + stride, plant + 2, 8, 3.2, 0, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.save();
-      ctx.translate(10, 16);
-      const swinging = state.swingCooldown > 0.12;
-      const target = swinging ? 2.5 : -0.55;
-      state.batAngle += (target - state.batAngle) * 0.35;
-      ctx.rotate(state.batAngle);
+      ctx.translate(0, 10);
+      ctx.rotate(-0.18 + hips);
+      ctx.fillStyle = "#1d3557";
+      ctx.beginPath();
+      ctx.roundRect(-13, 0, 26, 32, 6);
+      ctx.fill();
+      ctx.fillStyle = "#e63946";
+      ctx.fillRect(-13, 0, 26, 8);
+      ctx.restore();
+
       ctx.fillStyle = "#f1c27d";
-      ctx.fillRect(-3, -3, 8, 14);
-      ctx.fillStyle = "#8b5a2b";
-      ctx.fillRect(0, -52, 5, 54);
-      ctx.fillStyle = "#d9b382";
-      ctx.fillRect(-1, -58, 7, 10);
+      ctx.beginPath();
+      ctx.arc(-4 + hips * 6, 2, 10, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#111";
+      ctx.beginPath();
+      ctx.ellipse(-4 + hips * 6, -1, 11, 7, 0, Math.PI, 0, true);
+      ctx.fill();
       ctx.restore();
-      ctx.restore();
+
+      const bat = batPoints();
+      const h = project(bat.hands.x, bat.hands.y, bat.hands.z);
+      const br = project(bat.barrel.x, bat.barrel.y, bat.barrel.z);
+      const sh = project(-7.1 - hips * 0.4, 4.35, 3.2);
+      const sh2 = project(-7.8 - hips * 0.4, 4.2, 3.55);
+      ctx.lineCap = "round";
+      limb(sh.x, sh.y, h.x, h.y, Math.max(6, h.s * 0.1), "#1d3557");
+      limb(sh2.x, sh2.y, h.x + 6, h.y + 4, Math.max(5, h.s * 0.09), "#f1c27d");
+      ctx.strokeStyle = "#6b3d18";
+      ctx.lineWidth = Math.max(4, h.s * 0.08);
+      ctx.beginPath();
+      ctx.moveTo(h.x, h.y);
+      ctx.lineTo(br.x, br.y);
+      ctx.stroke();
+      ctx.strokeStyle = "#c9854a";
+      ctx.lineWidth = Math.max(6, br.s * 0.11);
+      ctx.beginPath();
+      ctx.moveTo(lerp(h.x, br.x, 0.35), lerp(h.y, br.y, 0.35));
+      ctx.lineTo(br.x, br.y);
+      ctx.stroke();
+      ctx.fillStyle = "#f1c27d";
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, Math.max(4, h.s * 0.07), 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function drawTrail() {
+      for (let i = 0; i < state.trail.length; i++) {
+        const t = state.trail[i];
+        const p = project(t.x, t.y, t.z);
+        const a = (i / state.trail.length) * 0.35;
+        ctx.fillStyle = `rgba(255,255,255,${a})`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, Math.max(1.5, p.s * 0.05), 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
     function drawBall() {
       const b = state.ball;
-      if (state.phase === "idle" || state.phase === "windup") return;
-      if (b.z < -4 && !b.hit) return;
-      const p = project(b.x, b.y, Math.max(0.4, b.z));
-      const r = Math.max(3, Math.min(28, p.s * 0.09));
-      ctx.save();
-      ctx.fillStyle = "rgba(0,0,0,0.25)";
-      const ground = project(b.x, 0, Math.max(0.4, b.z));
+      if (!b || b.inHand) return;
+      if (b.z < -5 && !b.hit) return;
+      const p = project(b.x, b.y, Math.max(0.35, b.z));
+      const approaching = !b.hit && state.phase === "pitch";
+      const r = Math.max(3, Math.min(36, p.s * (approaching ? 0.13 : 0.1)));
+      const ground = project(b.x, 0, Math.max(0.35, b.z));
+      ctx.fillStyle = `rgba(0,0,0,${clamp(0.28 - b.y * 0.02, 0.08, 0.3)})`;
       ctx.beginPath();
-      ctx.ellipse(ground.x, ground.y + 8, r * 1.2, r * 0.35, 0, 0, Math.PI * 2);
+      ctx.ellipse(ground.x, ground.y + 10, r * 1.35, r * 0.32, 0, 0, Math.PI * 2);
       ctx.fill();
+
+      if (approaching && r > 8) {
+        const prev = state.trail[Math.max(0, state.trail.length - 6)] || b;
+        const pp = project(prev.x, prev.y, prev.z);
+        const streak = ctx.createLinearGradient(pp.x, pp.y, p.x, p.y);
+        streak.addColorStop(0, "rgba(255,255,255,0)");
+        streak.addColorStop(1, "rgba(255,255,255,0.35)");
+        ctx.strokeStyle = streak;
+        ctx.lineWidth = r * 0.7;
+        ctx.beginPath();
+        ctx.moveTo(pp.x, pp.y);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+      }
+
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(b.spin);
       ctx.fillStyle = "#fff";
       ctx.beginPath();
-      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
       ctx.fill();
       ctx.strokeStyle = "#d62828";
-      ctx.lineWidth = Math.max(1, r * 0.12);
+      ctx.lineWidth = Math.max(1, r * 0.1);
       ctx.beginPath();
-      ctx.arc(p.x - r * 0.15, p.y, r * 0.7, -0.8, 0.8);
+      ctx.arc(-r * 0.12, 0, r * 0.72, -0.9, 0.9);
       ctx.stroke();
       ctx.beginPath();
-      ctx.arc(p.x + r * 0.15, p.y, r * 0.7, Math.PI - 0.8, Math.PI + 0.8);
+      ctx.arc(r * 0.12, 0, r * 0.72, Math.PI - 0.9, Math.PI + 0.9);
       ctx.stroke();
+      ctx.fillStyle = "rgba(0,0,0,0.08)";
+      ctx.beginPath();
+      ctx.ellipse(-r * 0.25, -r * 0.25, r * 0.35, r * 0.2, -0.5, 0, Math.PI * 2);
+      ctx.fill();
       ctx.restore();
     }
 
+    function drawParticles() {
+      for (const p of state.particles) {
+        const q = project(p.x, p.y, p.z);
+        const a = clamp(p.life / p.max, 0, 1);
+        ctx.globalAlpha = a;
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(q.x, q.y, 2.4 * a + 1, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+    }
+
     function drawCatcherOverlay() {
+      const b = state.ball;
+      let gx = W * 0.62;
+      let gy = H - 78;
+      if (b && !b.hit && !b.inHand && b.z < 28) {
+        const p = project(b.x, Math.max(0.4, b.y * 0.35), 0.8);
+        const k = clamp((28 - b.z) / 28, 0, 1);
+        gx = lerp(gx, p.x + 36, k * 0.85);
+        gy = lerp(gy, Math.min(H - 48, p.y + 40), k * 0.75);
+      }
+      gx += Math.sin(state.camBob) * 2;
+      gy += Math.cos(state.camBob * 0.8) * 1.5;
+      const snap = state.glove.snap;
+
       ctx.fillStyle = "#1b2433";
       ctx.beginPath();
       ctx.moveTo(0, H);
-      ctx.lineTo(0, H - 90);
-      ctx.quadraticCurveTo(W * 0.25, H - 40, W * 0.5, H - 28);
-      ctx.quadraticCurveTo(W * 0.75, H - 40, W, H - 90);
+      ctx.lineTo(0, H - 96);
+      ctx.quadraticCurveTo(W * 0.25, H - 44, W * 0.5, H - 30);
+      ctx.quadraticCurveTo(W * 0.75, H - 44, W, H - 96);
       ctx.lineTo(W, H);
       ctx.fill();
 
-      const gx = W * 0.62;
-      const gy = H - 70;
       ctx.save();
       ctx.translate(gx, gy);
-      ctx.rotate(-0.25);
+      ctx.rotate(-0.28 + snap * 0.4);
+      ctx.scale(1 - snap * 0.08, 1 + snap * 0.12);
       ctx.fillStyle = "#7a3e1d";
       ctx.beginPath();
-      ctx.ellipse(0, 0, 54, 38, 0, 0, Math.PI * 2);
+      ctx.ellipse(0, 0, 58, 40, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = "#5c2e14";
       ctx.beginPath();
-      ctx.ellipse(6, 4, 22, 16, 0, 0, Math.PI * 2);
+      ctx.ellipse(8, 5, 24, 17, 0, 0, Math.PI * 2);
       ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,0.25)";
+      ctx.lineWidth = 3;
+      for (let i = -2; i <= 2; i++) {
+        ctx.beginPath();
+        ctx.moveTo(i * 10, -18);
+        ctx.quadraticCurveTo(i * 14, 0, i * 8, 22);
+        ctx.stroke();
+      }
       ctx.restore();
 
-      ctx.strokeStyle = "rgba(10,12,16,0.55)";
+      ctx.strokeStyle = "rgba(10,12,16,0.5)";
       ctx.lineWidth = 10;
       ctx.beginPath();
       ctx.moveTo(W * 0.18, 0);
@@ -526,18 +832,17 @@
     function drawHudOverlay() {
       if (state.flash > 0) {
         ctx.fillStyle = state.result && state.result.kind === "hit"
-          ? `rgba(255,230,120,${state.flash * 0.45})`
-          : `rgba(180,20,20,${state.flash * 0.35})`;
+          ? `rgba(255,230,120,${state.flash * 0.42})`
+          : `rgba(180,20,20,${state.flash * 0.32})`;
         ctx.fillRect(0, 0, W, H);
       }
-
       ctx.textAlign = "center";
       if (state.mode === "title") {
         banner("CATCHER'S VIEW", "Press Space to start", "Swing when the ball reaches the plate");
       } else if (state.mode === "over") {
         banner("THREE STRIKES — YOU'RE OUT", "Press Space to play again", `Best drive ${Math.round(state.best)} ft  •  ${state.hits} hits`);
       } else if (state.phase === "idle") {
-        ctx.fillStyle = "rgba(0,0,0,0.35)";
+        ctx.fillStyle = "rgba(0,0,0,0.4)";
         ctx.font = "bold 22px Trebuchet MS";
         ctx.fillText("Pitcher coming set…", W / 2, 52);
       } else if (state.phase === "windup") {
@@ -581,53 +886,98 @@
     }
 
     function update(dt) {
+      state.clock += dt;
+      state.camBob += dt * 2.1;
       state.flash = Math.max(0, state.flash - dt);
-      state.swingCooldown = Math.max(0, state.swingCooldown - dt);
+      state.camShake = Math.max(0, state.camShake - dt * 1.6);
+      state.glove.snap = Math.max(0, state.glove.snap - dt * 2.4);
+      if (state.swinging) state.swingClock += dt;
+
+      const wantLoad = state.phase === "windup" || state.phase === "pitch" ? 1 : 0;
+      state.load += (wantLoad - state.load) * Math.min(1, dt * 6);
+
+      for (const p of state.particles) {
+        p.life -= dt;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.z += p.vz * dt;
+        p.vy -= 18 * dt;
+      }
+      state.particles = state.particles.filter((p) => p.life > 0);
+
       if (state.mode !== "play") return;
 
       if (state.phase === "idle") {
         state.t += dt;
-        if (state.t > 1.15) startWindup();
+        if (state.t > 1.25) startWindup();
       } else if (state.phase === "windup") {
         state.t += dt;
-        state.pitcherArm = state.t;
-        if (state.t > 0.85) startPitch();
+        if (state.t > 1.35) startPitch();
       } else if (state.phase === "pitch") {
         state.pitchT += dt;
-        const u = Math.min(1, state.pitchT / state.pitchDur);
-        state.ball.z = 60.5 + (-2.2 - 60.5) * u;
-        state.ball.y = 4.2 - u * 2.35 + Math.sin(u * Math.PI) * 0.2;
-        state.ball.x += (0 - state.ball.x) * dt * 0.8;
-        if (state.pitchT >= state.pitchDur + 0.12 && state.swingT < 0) {
-          takePitch();
+        const u = clamp(state.pitchT / state.pitchDur, 0, 1);
+        const drop = 0.15 * u + 1.85 * u * u;
+        const b = state.ball;
+        b.z = lerp(58.5, -1.6, u);
+        b.y = lerp(6.1, b.targetY, u) - drop;
+        b.x = lerp(0.35, b.targetX, easeOut(u));
+        b.spin += dt * 22;
+        state.trail.push({ x: b.x, y: b.y, z: b.z });
+        if (state.trail.length > 14) state.trail.shift();
+        if (b.z < 8) {
+          state.glove.x += (b.x - state.glove.x) * dt * 8;
         }
+        if (state.pitchT >= state.pitchDur + 0.1 && state.swingT < 0) takePitch();
       } else if (state.phase === "result") {
         state.resultT += dt;
-        if (state.ball.hit) {
-          state.ball.z += state.ball.vz * dt;
-          state.ball.y += state.ball.vy * dt;
-          state.ball.x += state.ball.vx * dt;
-          state.ball.vy -= 22 * dt;
-          state.ball.vz *= 0.995;
+        const b = state.ball;
+        if (b.hit) {
+          b.z += b.vz * dt;
+          b.y += b.vy * dt;
+          b.x += b.vx * dt;
+          b.vy -= 28 * dt;
+          b.spin += dt * 26;
+          if (b.y < 0) {
+            b.y = 0;
+            b.vy *= -0.28;
+            b.vz *= 0.72;
+            burst(b.x, 0.1, b.z, 6, "#c4a06a", 4);
+          }
+          state.trail.push({ x: b.x, y: b.y, z: b.z });
+          if (state.trail.length > 16) state.trail.shift();
+        } else if (!state.swinging || state.result.kind === "take") {
+          b.z = Math.max(-2.2, b.z - 26 * dt);
+          b.y += (1.35 - b.y) * dt * 10;
+          b.spin += dt * 16;
+          if (b.z < 1.2 && state.glove.snap < 0.2) state.glove.snap = 1;
         } else {
-          state.ball.z = Math.max(-3, state.ball.z - 18 * dt);
-          state.ball.y = Math.max(0.4, state.ball.y - 4 * dt);
+          b.z = Math.max(-2.2, b.z - 22 * dt);
+          b.y = Math.max(0.5, b.y - 3 * dt);
         }
-        const wait = state.result && state.result.kind === "hit" ? 1.55 : 1.05;
+        const wait = state.result && state.result.kind === "hit" ? 1.7 : 1.15;
         if (state.resultT > wait && state.mode === "play") startIdle();
       }
     }
 
     function render() {
+      ctx.clearRect(0, 0, W, H);
       drawSky();
       drawStadium();
       drawField();
       drawPitcher();
-      if (!state.ball.hit) drawBall();
+      drawTrail();
+      if (state.ball && !state.ball.hit) drawBall();
       drawBatter();
-      if (state.ball.hit) drawBall();
+      if (state.ball && state.ball.hit) drawBall();
+      drawParticles();
       drawCatcherOverlay();
       drawHudOverlay();
+    }
+
+    if (!CanvasRenderingContext2D.prototype.roundRect) {
+      CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h) {
+        this.rect(x, y, w, h);
+      };
     }
 
     updateHud();
